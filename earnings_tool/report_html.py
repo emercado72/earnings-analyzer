@@ -17,8 +17,12 @@ h1{font-size:26px;margin:0 0 2px}h2{font-size:17px;margin:0 0 12px;font-weight:6
 .sub{color:var(--ink2);margin-bottom:22px}.sub b{color:var(--ink)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:18px}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-bottom:18px}
-.tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
-.tile .k{font-size:12px;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em}.tile .v{font-size:22px;font-weight:600;margin-top:2px;white-space:nowrap}.tile .d{font-size:12px;color:var(--ink2)}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;position:relative;cursor:help;transition:border-color .15s,transform .15s}
+.tile[data-tip]:hover,.tile[data-tip]:focus-visible{border-color:var(--pos);transform:translateY(-1px);outline:none}
+.tile .k{font-size:12px;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em;padding-right:16px}.tile .v{font-size:22px;font-weight:600;margin-top:2px;white-space:nowrap}.tile .d{font-size:12px;color:var(--ink2)}
+.tile .q{position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;border:1px solid var(--line);color:var(--ink3);font-size:10px;font-weight:700;line-height:13px;text-align:center;opacity:.55}
+.tile[data-tip]:hover .q,.tile[data-tip]:focus-visible .q{opacity:1;border-color:var(--pos);color:var(--pos)}
+th[data-tip]{cursor:help;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px;text-decoration-color:var(--ink3)}
 .pos{color:var(--pos)}.neg{color:var(--neg)}.meet{color:var(--warn)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}@media(max-width:820px){.grid2{grid-template-columns:1fr}}
 table{border-collapse:collapse;width:100%;font-size:13.5px;font-variant-numeric:tabular-nums}
@@ -33,7 +37,8 @@ ul.ins{margin:0;padding-left:20px}ul.ins li{margin:5px 0}
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;font-size:14px}.kv b{color:var(--ink2);font-weight:500}
 .dist{display:flex;height:16px;border-radius:6px;overflow:hidden;gap:2px;margin:6px 0 2px}.dist span{display:block}
 .note{font-size:12px;color:var(--ink3);margin-top:14px}
-#tip{position:fixed;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.12);display:none;z-index:9;color:var(--ink)}
+#tip{position:fixed;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.45;box-shadow:0 6px 22px rgba(0,0,0,.18);display:none;z-index:99;color:var(--ink2);max-width:330px}
+#tip b{display:block;color:var(--ink);font-size:13px;margin-bottom:3px}#tip em{font-style:normal;color:var(--ink);font-weight:600}
 form.search{display:flex;gap:8px;margin-bottom:18px}form.search input{padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:15px;text-transform:uppercase}
 form.search button{padding:8px 16px;border-radius:8px;border:1px solid var(--pos);background:var(--pos);color:#fff;font-weight:600;cursor:pointer}
 """
@@ -141,18 +146,53 @@ def render_html(report: TickerReport, stats: dict, with_form: bool = False) -> s
         )
 
     up = e.get("target_upside")
+    def _t(title, body):
+        return html.escape(f"{title}||{body}")
+
+    n_ev = s["n"]
     tiles = [
-        ("Tasa de beat", _pct(s["beat_rate"], False, 0), f"{s['beats']} beats · {s['misses']} misses · {s['meets']} meets"),
-        ("Sorpresa media EPS", _pct(s["avg_surprise"]), f"mediana {_pct(s['median_surprise'])}"),
-        ("Movimiento típico 1d", "±" + _pct(s["avg_abs_move"], False), f"sube el {_pct(s['up_rate'], False, 0)} de las veces"),
-        ("Reacción media 1d", _pct(s["avg_move"]), f"5 días: {_pct(s['avg_move_5d'])}"),
-        ("Si BEAT / si MISS", f"{_pct(s['avg_move_on_beat'])} / {_pct(s['avg_move_on_miss'])}", f"sube en {_pct(s['up_rate_on_beat'], False, 0)} de los beats"),
+        ("Tasa de beat", _pct(s["beat_rate"], False, 0), f"{s['beats']} beats · {s['misses']} misses · {s['meets']} meets",
+         _t("¿Cuántas veces batió al consenso?",
+            f"Antes de cada resultado los analistas estiman un beneficio por acción (EPS). Si el real supera esa estimación es un BEAT; si queda por debajo, un MISS. "
+            f"Aquí: {s['beats']} de {n_ev} reportes por encima de lo esperado. Un porcentaje alto indica una empresa predecible o un consenso conservador.")),
+        ("Sorpresa media EPS", _pct(s["avg_surprise"]), f"mediana {_pct(s['median_surprise'])}",
+         _t("¿Por cuánto margen suele batir?",
+            f"No es lo mismo superar el consenso por un 0,5% que por un 20%. Es la diferencia media entre el EPS real y el estimado, en porcentaje. "
+            f"Media {_pct(s['avg_surprise'])} y mediana {_pct(s['median_surprise'])}: la mediana ignora los trimestres extremos, así que si ambas se parecen la sorpresa es estable.")),
+        ("Movimiento típico 1d", "±" + _pct(s["avg_abs_move"], False), f"sube el {_pct(s['up_rate'], False, 0)} de las veces",
+         _t("¿Cuánto sacude la acción?",
+            f"Media del movimiento del precio en la primera sesión tras el anuncio, sin mirar la dirección (una subida del 5% y una caída del 5% cuentan igual). "
+            f"Mide el tamaño del susto: históricamente ±{_pct(s['avg_abs_move'], False)}, con un máximo de {_pct(s['max_abs_move'], False)}. Es el número que usamos para el rango de precio del próximo earning.")),
+        ("Reacción media 1d", _pct(s["avg_move"]), f"5 días: {_pct(s['avg_move_5d'])}",
+         _t("¿Con qué signo acaba el día?",
+            f"El mismo movimiento pero con signo: al sumar subidas y bajadas, ¿queda a favor o en contra? {_pct(s['avg_move'])} de media. "
+            f"Si es mucho menor que el movimiento típico (±{_pct(s['avg_abs_move'], False)}), significa que hay saltos fuertes en ambas direcciones que se cancelan entre sí. A 5 días: {_pct(s['avg_move_5d'])}.")),
+        ("Si BEAT / si MISS", f"{_pct(s['avg_move_on_beat'])} / {_pct(s['avg_move_on_miss'])}", f"sube en {_pct(s['up_rate_on_beat'], False, 0)} de los beats",
+         _t("¿Premia el mercado el beat?",
+            f"La comparación clave: reacción media del precio cuando bate ({_pct(s['avg_move_on_beat'])}) frente a cuando falla ({_pct(s['avg_move_on_miss'])}). "
+            f"Solo sube en el {_pct(s['up_rate_on_beat'], False, 0)} de los beats. Si ese porcentaje es bajo, el aprobado ya estaba descontado en el precio y lo que manda es la previsión (guidance) que da la empresa.")),
         ("Consenso analistas", (an.recommendation_key or "—").replace("_", " ").upper(),
-         f"{an.n_opinions or '?'} analistas · media {an.recommendation_mean:.2f}/5" if an.recommendation_mean else ""),
-        ("Precio objetivo medio", f"{_num(an.target_mean)}", (f"<span class='{_cls(up)}'>{_pct(up)}</span> vs {_num(report.price)} {cur}") if up is not None else ""),
-        ("Próximo earnings", esc(nx.date or "por confirmar"), f"EPS est. {_num(nx.eps_avg)} ({_num(nx.eps_low)}–{_num(nx.eps_high)})"),
+         f"{an.n_opinions or '?'} analistas · media {an.recommendation_mean:.2f}/5" if an.recommendation_mean else "",
+         _t("¿Qué recomiendan los expertos?",
+            f"Recomendación agregada de {an.n_opinions or '?'} analistas que cubren el valor, en una escala de 1 a 5 donde 1 es strong buy y 5 es sell"
+            + (f"; aquí {an.recommendation_mean:.2f}." if an.recommendation_mean else ".")
+            + " Abajo tienes cómo se reparten los votos y si han cambiado de opinión en los últimos 3 meses. Es opinión de mercado, no una verdad: suele ir sesgada hacia comprar.")),
+        ("Precio objetivo medio", f"{_num(an.target_mean)}", (f"<span class='{_cls(up)}'>{_pct(up)}</span> vs {_num(report.price)} {cur}") if up is not None else "",
+         _t("¿A cuánto creen que llegará?",
+            f"Media de los precios objetivo a 12 meses publicados por los analistas: {_num(an.target_mean)} {cur} frente a {_num(report.price)} {cur} de hoy"
+            + (f", es decir un potencial de {_pct(up)}." if up is not None else ".")
+            + f" Ojo al rango completo ({_num(an.target_low)}–{_num(an.target_high)}): cuanto más abierto, menos acuerdo hay entre ellos.")),
+        ("Próximo earnings", esc(nx.date or "por confirmar"), f"EPS est. {_num(nx.eps_avg)} ({_num(nx.eps_low)}–{_num(nx.eps_high)})",
+         _t("El próximo examen",
+            f"Fecha prevista del siguiente reporte y la nota que espera el mercado: EPS de {_num(nx.eps_avg)}"
+            + (f", un {_pct(nx.eps_growth * 100)} frente a los {_num(nx.eps_year_ago)} del mismo trimestre del año pasado" if nx.eps_growth is not None else "")
+            + f". Batir esa cifra es el listón; el rango {_num(nx.eps_low)}–{_num(nx.eps_high)} recoge al analista más pesimista y al más optimista.")),
     ]
-    tiles_html = "".join(f"<div class='tile'><div class='k'>{k}</div><div class='v'>{v}</div><div class='d'>{d}</div></div>" for k, v, d in tiles)
+    tiles_html = "".join(
+        f"<div class='tile' data-tip=\"{tip}\" tabindex='0'><div class='q'>?</div>"
+        f"<div class='k'>{k}</div><div class='v'>{v}</div><div class='d'>{d}</div></div>"
+        for k, v, d, tip in tiles
+    )
 
     dist_html = ""
     if an.distribution:
@@ -203,15 +243,45 @@ def render_html(report: TickerReport, stats: dict, with_form: bool = False) -> s
   <div class="card"><h2>Expectativa próximo earnings</h2>{next_html}</div>
 </div>
 <div class="card"><h2>Últimos {s['n']} earnings ({s['first_date']} → {s['last_date']})</h2>
-<div class="tw"><table><thead><tr><th>#</th><th>Fecha</th><th>EPS est.</th><th>EPS real</th><th>Sorpresa</th><th>Resultado</th><th>Cierre prev.</th><th>Cierre post</th><th>Reacción 1d</th><th>5 días</th></tr></thead>
+<div class="tw"><table><thead><tr><th>#</th>
+<th data-tip="Fecha del reporte||BMO (before market open) = publicó antes de abrir la bolsa, así que la reacción se ve ese mismo día. AMC (after market close) = publicó tras el cierre, y el mercado reacciona a la sesión siguiente.">Fecha</th>
+<th data-tip="EPS estimado||Beneficio por acción que esperaban los analistas para ese trimestre. Es el listón a superar.">EPS est.</th>
+<th data-tip="EPS real||Beneficio por acción que la empresa reportó de verdad.">EPS real</th>
+<th data-tip="Sorpresa||Diferencia porcentual entre el EPS real y el estimado. Positiva = batió al consenso.">Sorpresa</th>
+<th data-tip="Resultado||BEAT si superó el consenso, MISS si quedó por debajo, MEET si acertó en el clavo.">Resultado</th>
+<th data-tip="Cierre previo||Precio de cierre de la sesión anterior a que el mercado pudiera reaccionar al reporte. Es la referencia de partida.">Cierre prev.</th>
+<th data-tip="Cierre posterior||Precio de cierre de la primera sesión en la que el mercado ya conocía el reporte.">Cierre post</th>
+<th data-tip="Reacción a 1 día||Cuánto se movió el precio entre esos dos cierres. Es el veredicto inmediato del mercado sobre el reporte.">Reacción 1d</th>
+<th data-tip="Reacción a 5 días||Movimiento acumulado tras cinco sesiones. Sirve para ver si el golpe inicial se mantuvo o se dio la vuelta al reposar la noticia.">5 días</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div>
 <div class="note">Beat/miss según EPS reportado vs consenso (Yahoo Finance). Reacción 1d = cierre de la primera sesión tras el anuncio vs cierre previo (BMO: la sesión del mismo día; AMC: la sesión siguiente). Precios ajustados por splits.</div></div>
 </div>
 <div id="tip"></div>
 <script>
-(function(){{var tip=document.getElementById('tip');document.querySelectorAll('.bar').forEach(function(b){{
-b.addEventListener('mousemove',function(ev){{tip.textContent=b.dataset.tip;tip.style.display='block';tip.style.left=(ev.clientX+12)+'px';tip.style.top=(ev.clientY+12)+'px';}});
-b.addEventListener('mouseleave',function(){{tip.style.display='none';}});}});}})();
+(function(){{
+  var tip=document.getElementById('tip');
+  function show(el,x,y){{
+    var raw=el.getAttribute('data-tip')||'';var p=raw.split('||');
+    tip.innerHTML=p.length>1?'<b>'+p[0]+'</b>'+p.slice(1).join('||'):p[0];
+    tip.style.display='block';tip.style.left='0px';tip.style.top='0px';
+    var r=tip.getBoundingClientRect();
+    var left=x+14,top=y+16;
+    if(left+r.width>window.innerWidth-10)left=Math.max(10,x-r.width-14);
+    if(top+r.height>window.innerHeight-10)top=Math.max(10,y-r.height-16);
+    tip.style.left=left+'px';tip.style.top=top+'px';
+  }}
+  function hide(){{tip.style.display='none';}}
+  document.querySelectorAll('[data-tip]').forEach(function(el){{
+    el.addEventListener('mousemove',function(ev){{show(el,ev.clientX,ev.clientY);}});
+    el.addEventListener('mouseleave',hide);
+    el.addEventListener('focus',function(){{
+      var r=el.getBoundingClientRect();show(el,r.left+r.width/2-14,r.bottom-16);
+    }});
+    el.addEventListener('blur',hide);
+  }});
+  document.addEventListener('keydown',function(ev){{if(ev.key==='Escape')hide();}});
+  window.addEventListener('scroll',hide,{{passive:true}});
+}})();
 </script>"""
 
 
