@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.vercel/
+*_earnings.html
+*.json
+!vercel.json
+!package.json
+.DS_Store

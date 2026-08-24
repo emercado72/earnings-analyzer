@@ -1,0 +1,4 @@
+#!/bin/bash
+# Lanzador: ./earnings AAPL   |   ./earnings --serve
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$DIR/.venv/bin/python" -W ignore -m earnings_tool "$@"
