@@ -88,9 +88,13 @@ class TickerReport:
     next_earnings: NextEarnings
     analysts: AnalystView
     generated_at: str
+    expected_move: object = None  # ExpectedMove | None (opciones del vencimiento del earning)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        if self.expected_move is not None and not isinstance(d.get("expected_move"), dict):
+            d["expected_move"] = self.expected_move.to_dict()
+        return d
 
 
 # --------------------------------------------------------------------------- #
@@ -138,7 +142,7 @@ def _timing_from_ts(ts) -> str:
 # --------------------------------------------------------------------------- #
 # Carga principal
 # --------------------------------------------------------------------------- #
-def fetch_report(ticker: str, n_events: int = 20) -> TickerReport:
+def fetch_report(ticker: str, n_events: int = 20, with_options: bool = True) -> TickerReport:
     ticker = ticker.strip().upper()
     t = yf.Ticker(ticker)
 
@@ -285,6 +289,19 @@ def fetch_report(ticker: str, n_events: int = 20) -> TickerReport:
     if price is None and not closes.empty:
         price = float(closes.iloc[-1])
 
+    # --- movimiento implícito por opciones (vencimiento que cubre el earning) ---
+    expected_move = None
+    if with_options:
+        try:
+            from .options import fetch_expected_move
+            expected_move = fetch_expected_move(
+                ticker, next_date, price,
+                [e.move_1d_pct for e in events if e.move_1d_pct is not None],
+            )
+        except Exception as exc:  # noqa: BLE001
+            from .options import ExpectedMove
+            expected_move = ExpectedMove(False, f"Error leyendo opciones: {exc}")
+
     return TickerReport(
         ticker=ticker,
         name=info.get("shortName") or info.get("longName") or ticker,
@@ -297,4 +314,5 @@ def fetch_report(ticker: str, n_events: int = 20) -> TickerReport:
         next_earnings=next_earnings,
         analysts=analysts,
         generated_at=dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        expected_move=expected_move,
     )

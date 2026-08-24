@@ -11,9 +11,13 @@ Herramienta que, dado un ticker, analiza sus **últimos 20 eventos de earnings**
   si beat / si miss, racha actual, correlación sorpresa↔reacción, últimos 4 y 8.
 - **Valoración de analistas**: consenso (buy/hold/sell), distribución de recomendaciones
   de los últimos 3 meses, precio objetivo (bajo/medio/mediana/alto) y potencial.
+- **Movimiento esperado para el día del earning** (para elegir strike): movimiento
+  implícito que descuenta el mercado de opciones — straddle ATM del primer vencimiento
+  que cubre el reporte —, comparado con el movimiento histórico real, y una **escalera de
+  strikes** con prima, breakeven, movimiento necesario, interés abierto, IV y con qué
+  frecuencia los earnings pasados superaron ese breakeven.
 - **Expectativa del próximo earning**: fecha, EPS e ingresos consenso (rango, nº de
-  analistas, crecimiento interanual), EPS ajustado por la sorpresa histórica y rango de
-  precio implícito por el movimiento típico.
+  analistas, crecimiento interanual) y EPS ajustado por la sorpresa histórica.
 
 Fuente de datos: Yahoo Finance (vía `yfinance`), sin API key.
 
@@ -31,6 +35,7 @@ python3 -m venv .venv
 ./earnings NVDA --open             # además genera NVDA_earnings.html y lo abre
 ./earnings MSFT --html msft.html --json msft.json
 ./earnings TSLA -n 12              # solo los últimos 12 eventos
+./earnings AAPL --no-options       # omite la cadena de opciones (más rápido)
 ./earnings --serve                 # interfaz web en http://127.0.0.1:8765
 ```
 
@@ -41,6 +46,7 @@ En modo `--serve` hay también un endpoint JSON: `/api/report?ticker=AAPL`.
 ```
 earnings_tool/
   data.py             # descarga (yfinance): earnings, precios, analistas, estimaciones
+  options.py          # movimiento implícito (straddle ATM) y escalera de strikes
   analysis.py         # estadísticas, expectativa y conclusiones
   report_terminal.py  # salida rich en terminal
   report_html.py      # reporte HTML autocontenido con gráficos SVG
@@ -56,6 +62,15 @@ earnings_tool/
   movimiento absoluto histórico (no es una volatilidad implícita de opciones).
 - Yahoo a veces no publica hora del anuncio (columna "Hora" = n/d); en ese caso se
   asume AMC.
+- El movimiento implícito sale del straddle ATM (call + put del strike más cercano al
+  spot) del primer vencimiento igual o posterior a la fecha del earning. Es la
+  convención estándar de mesa, pero es una aproximación: incluye algo de valor temporal
+  ajeno al evento.
+- La columna "histórico supera BE" es **frecuencia pasada** sobre los últimos N earnings,
+  no una probabilidad futura ni una recomendación. Los datos de la cadena de opciones
+  llegan con retraso; contrasta precios con tu bróker antes de operar.
+- No todos los valores tienen opciones listadas (las cotizadas europeas normalmente no);
+  en ese caso la sección lo indica y el resto del informe funciona igual.
 
 ## Despliegue en Vercel
 

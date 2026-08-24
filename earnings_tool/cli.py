@@ -23,6 +23,8 @@ def main(argv=None):
     ap.add_argument("--json", metavar="FILE", help="Guardar datos + estadísticas en JSON")
     ap.add_argument("--open", action="store_true", help="Abrir el HTML en el navegador (implica --html si no se indica)")
     ap.add_argument("--quiet", action="store_true", help="No imprimir el reporte en terminal")
+    ap.add_argument("--no-options", action="store_true",
+                    help="No consultar la cadena de opciones (más rápido, sin movimiento implícito)")
     ap.add_argument("--serve", action="store_true", help="Lanzar interfaz web local para elegir ticker")
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args(argv)
@@ -38,7 +40,7 @@ def main(argv=None):
     console = Console()
     with console.status(f"Descargando datos de {args.ticker.upper()}…"):
         try:
-            report = fetch_report(args.ticker, n_events=args.events)
+            report = fetch_report(args.ticker, n_events=args.events, with_options=not args.no_options)
         except TickerNotFound as exc:
             console.print(f"[red]Error:[/] {exc}")
             return 1

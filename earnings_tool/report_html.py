@@ -37,6 +37,22 @@ ul.ins{margin:0;padding-left:20px}ul.ins li{margin:5px 0}
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;font-size:14px}.kv b{color:var(--ink2);font-weight:500}
 .dist{display:flex;height:16px;border-radius:6px;overflow:hidden;gap:2px;margin:6px 0 2px}.dist span{display:block}
 .note{font-size:12px;color:var(--ink3);margin-top:14px}
+.strikes td,.strikes th{padding:6px 8px}
+.strikes tr.atm{background:color-mix(in srgb,var(--pos) 9%,transparent)}
+.strikes tr.atm td{font-weight:600}
+.strikes .out{color:var(--ink3)}
+.prob{display:inline-flex;align-items:center;gap:6px;justify-content:flex-end}
+.prob .track{width:46px;height:6px;border-radius:3px;background:var(--mid);overflow:hidden;flex:none;display:block}
+.prob .fill{display:block;height:6px;border-radius:3px;background:var(--pos);min-width:2px}
+.em{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:14px}
+.em>div{background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+.em .k{font-size:11px;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em}
+.em .v{font-size:18px;font-weight:600;margin-top:1px;white-space:nowrap}
+.range{position:relative;height:46px;margin:6px 0 2px}
+.range .bar{position:absolute;top:18px;left:0;right:0;height:6px;border-radius:3px;background:var(--mid)}
+.range .in{position:absolute;top:18px;height:6px;border-radius:3px;background:color-mix(in srgb,var(--pos) 45%,transparent)}
+.range .spot{position:absolute;top:11px;width:2px;height:20px;background:var(--ink)}
+.range .lbl{position:absolute;top:29px;font-size:11px;color:var(--ink2);white-space:nowrap}
 #tip{position:fixed;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.45;box-shadow:0 6px 22px rgba(0,0,0,.18);display:none;z-index:99;color:var(--ink2);max-width:330px}
 #tip b{display:block;color:var(--ink);font-size:13px;margin-bottom:3px}#tip em{font-style:normal;color:var(--ink);font-weight:600}
 form.search{display:flex;gap:8px;margin-bottom:18px}form.search input{padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:15px;text-transform:uppercase}
@@ -128,6 +144,99 @@ def _dist_bar(row):
     return f'<div class="dist">{spans}</div>'
 
 
+def _range_bar(em, stats):
+    """Barra visual: rango implícito frente al spot y a los percentiles históricos."""
+    if not em or not em.available or not em.spot:
+        return ""
+    p90 = stats.get("p90_abs_move") or em.implied_move_pct
+    span = max(em.implied_move_pct, p90) * 1.25
+    def x(pct):
+        return max(0.0, min(100.0, 50 + pct / span * 50))
+    a, b = x(-em.implied_move_pct), x(em.implied_move_pct)
+    return (
+        f'<div class="range"><div class="bar"></div>'
+        f'<div class="in" style="left:{a:.1f}%;width:{b - a:.1f}%"></div>'
+        f'<div class="spot" style="left:50%"></div>'
+        f'<div class="lbl" style="left:{a:.1f}%;transform:translateX(-50%)">{_num(em.implied_low)}</div>'
+        f'<div class="lbl" style="left:50%;transform:translateX(-50%);color:var(--ink)">{_num(em.spot)}</div>'
+        f'<div class="lbl" style="left:{b:.1f}%;transform:translateX(-50%)">{_num(em.implied_high)}</div>'
+        f'</div>'
+    )
+
+
+def _prob_cell(pct, n, total):
+    if pct is None:
+        return "<td>—</td>"
+    return (f'<td><span class="prob"><span class="track"><span class="fill" style="width:{min(pct, 100):.0f}%"></span></span>'
+            f'{pct:.0f}%</span><div style="font-size:11px;color:var(--ink3)">{n}/{total}</div></td>')
+
+
+def _strike_table(em, kind, title, cur, stats):
+    rows = [r for r in em.strikes if r["kind" if isinstance(r, dict) else "kind"] == kind] if em.strikes and isinstance(em.strikes[0], dict) else [r for r in em.strikes if r.kind == kind]
+    if not rows:
+        return ""
+    total = em.n_hist
+    out = [f'<h2 style="margin-top:4px">{title}</h2><div class="tw"><table class="strikes"><thead><tr>'
+           '<th style="text-align:left">Strike</th><th>Dist.</th><th>Prima</th><th>Breakeven</th>'
+           '<th data-tip="Probabilidad histórica||De los últimos earnings, qué porcentaje se movió lo suficiente para superar ese breakeven en esa dirección. Es frecuencia histórica pura, no una predicción.">Histórico supera BE</th>'
+           '<th>IV</th><th>OI</th></tr></thead><tbody>']
+    for r in rows:
+        atm = ' class="atm"' if abs(r.distance_pct) < 0.75 else ""
+        outside = "" if r.inside_implied else ' class="out"'
+        iv = f"{r.iv * 100:.0f}%" if r.iv else "—"
+        out.append(
+            f'<tr{atm}><td style="text-align:left"{outside}>{_num(r.strike)}</td>'
+            f'<td>{_pct(r.distance_pct)}</td><td>{_num(r.premium)}</td>'
+            f'<td>{_num(r.breakeven)} <span style="color:var(--ink3)">({_pct(r.breakeven_pct)})</span></td>'
+            + _prob_cell(r.hist_hit_breakeven, r.hist_hit_n, total)
+            + f'<td>{iv}</td><td>{r.open_interest:,}</td></tr>'
+        )
+    out.append("</tbody></table></div>")
+    return "".join(out)
+
+
+def _expected_move_html(em, stats, cur):
+    if em is None:
+        return ""
+    if not em.available:
+        return (f'<div class="card"><h2>Movimiento esperado para el día del earning</h2>'
+                f'<div class="note" style="margin:0">{html.escape(em.reason)}</div></div>')
+    pv = em.premium_vs_hist
+    verdict = "—"
+    if pv is not None:
+        verdict = ("Prima cara" if pv > 1 else ("Prima barata" if pv < -1 else "En línea"))
+    cover = "" if em.covers_earnings else (
+        '<div class="note" style="margin-top:0">⚠ El vencimiento elegido no cubre la fecha del earning '
+        '(Yahoo aún no publica ese vencimiento o falta la fecha del reporte).</div>')
+    tiles = [
+        ("Implícito (opciones)", "±" + _pct(em.implied_move_pct, False),
+         f"straddle {_num(em.straddle)} {cur}"),
+        ("Rango implícito", f"{_num(em.implied_low)}–{_num(em.implied_high)}", f"spot {_num(em.spot)}"),
+        ("Histórico medio", "±" + _pct(em.hist_move_pct, False) if em.hist_move_pct else "—",
+         f"mediana ±{_pct(stats.get('p50_abs_move'), False)}"),
+        ("Implícito vs histórico", _pct(pv) if pv is not None else "—", verdict),
+        ("Se quedó dentro", _pct(em.hist_inside_rate, False, 0) if em.hist_inside_rate is not None else "—",
+         f"de {em.n_hist} earnings pasados"),
+        ("Vencimiento", html.escape(em.expiry or "—"), f"{em.days_to_expiry} días · IV ATM {em.atm_iv * 100:.0f}%" if em.atm_iv else f"{em.days_to_expiry} días"),
+    ]
+    tiles_html = "".join(f'<div><div class="k">{k}</div><div class="v">{v}</div>'
+                         f'<div style="font-size:11px;color:var(--ink2)">{d}</div></div>' for k, v, d in tiles)
+    return (
+        '<div class="card"><h2>Movimiento esperado para el día del earning</h2>'
+        f'<div class="em">{tiles_html}</div>{cover}'
+        + _range_bar(em, stats)
+        + '<div class="note" style="margin-top:2px">Banda azul: rango que descuentan las opciones. La marca central es el precio actual.</div>'
+        + '<div class="grid2" style="margin-top:14px">'
+        + f'<div>{_strike_table(em, "call", "Calls (apuesta al alza)", cur, stats)}</div>'
+        + f'<div>{_strike_table(em, "put", "Puts (apuesta a la baja)", cur, stats)}</div>'
+        + '</div>'
+        + '<div class="note">Prima = punto medio bid/ask. Breakeven = strike ± prima, es decir cuánto tiene que moverse el subyacente '
+          'para que la opción comprada empiece a ganar. La columna «histórico supera BE» cuenta cuántos de los últimos earnings tuvieron un '
+          'movimiento suficiente para rebasar ese breakeven: es frecuencia pasada, no probabilidad futura. Datos de cadena de opciones con retraso; '
+          'contrasta con tu bróker antes de operar.</div></div>'
+    )
+
+
 def render_html(report: TickerReport, stats: dict, with_form: bool = False) -> str:
     s, an, nx, e = stats, report.analysts, report.next_earnings, stats["expectation"]
     cur = html.escape(report.currency)
@@ -146,6 +255,9 @@ def render_html(report: TickerReport, stats: dict, with_form: bool = False) -> s
         )
 
     up = e.get("target_upside")
+    em = getattr(report, "expected_move", None)
+    em_ok = em is not None and getattr(em, "available", False)
+
     def _t(title, body):
         return html.escape(f"{title}||{body}")
 
@@ -153,11 +265,13 @@ def render_html(report: TickerReport, stats: dict, with_form: bool = False) -> s
     tiles = [
         ("Tasa de beat", _pct(s["beat_rate"], False, 0), f"{s['beats']} beats · {s['misses']} misses · {s['meets']} meets",
          _t("¿Cuántas veces batió al consenso?",
-            f"Antes de cada resultado los analistas estiman un beneficio por acción (EPS). Si el real supera esa estimación es un BEAT; si queda por debajo, un MISS. "
+            f"Antes de cada resultado los analistas estiman el EPS (earnings per share, o beneficio por acción). Si el real supera esa estimación es un BEAT; si queda por debajo, un MISS. "
             f"Aquí: {s['beats']} de {n_ev} reportes por encima de lo esperado. Un porcentaje alto indica una empresa predecible o un consenso conservador.")),
         ("Sorpresa media EPS", _pct(s["avg_surprise"]), f"mediana {_pct(s['median_surprise'])}",
          _t("¿Por cuánto margen suele batir?",
-            f"No es lo mismo superar el consenso por un 0,5% que por un 20%. Es la diferencia media entre el EPS real y el estimado, en porcentaje. "
+            f"EPS (earnings per share) es el beneficio por acción: el beneficio neto de la empresa dividido entre el número de acciones. "
+            f"Es la cifra que estiman los analistas y la que decide si hay beat o miss. "
+            f"No es lo mismo superarla por un 0,5% que por un 20%: aquí ves la diferencia media entre el EPS real y el estimado, en porcentaje. "
             f"Media {_pct(s['avg_surprise'])} y mediana {_pct(s['median_surprise'])}: la mediana ignora los trimestres extremos, así que si ambas se parecen la sorpresa es estable.")),
         ("Movimiento típico 1d", "±" + _pct(s["avg_abs_move"], False), f"sube el {_pct(s['up_rate'], False, 0)} de las veces",
          _t("¿Cuánto sacude la acción?",
@@ -177,11 +291,19 @@ def render_html(report: TickerReport, stats: dict, with_form: bool = False) -> s
             f"Recomendación agregada de {an.n_opinions or '?'} analistas que cubren el valor, en una escala de 1 a 5 donde 1 es strong buy y 5 es sell"
             + (f"; aquí {an.recommendation_mean:.2f}." if an.recommendation_mean else ".")
             + " Abajo tienes cómo se reparten los votos y si han cambiado de opinión en los últimos 3 meses. Es opinión de mercado, no una verdad: suele ir sesgada hacia comprar.")),
-        ("Precio objetivo medio", f"{_num(an.target_mean)}", (f"<span class='{_cls(up)}'>{_pct(up)}</span> vs {_num(report.price)} {cur}") if up is not None else "",
-         _t("¿A cuánto creen que llegará?",
-            f"Media de los precios objetivo a 12 meses publicados por los analistas: {_num(an.target_mean)} {cur} frente a {_num(report.price)} {cur} de hoy"
-            + (f", es decir un potencial de {_pct(up)}." if up is not None else ".")
-            + f" Ojo al rango completo ({_num(an.target_low)}–{_num(an.target_high)}): cuanto más abierto, menos acuerdo hay entre ellos.")),
+        ("Movimiento implícito", ("±" + _pct(em.implied_move_pct, False)) if em_ok else "—",
+         (f"opciones {esc(em.expiry)} · {_num(em.implied_low)}–{_num(em.implied_high)}" if em_ok
+          else esc((em.reason if em is not None else "sin datos de opciones")[:60])),
+         _t("Lo que paga el mercado por ESTE earning",
+            (f"Precio del straddle ATM (call + put del strike {_num(em.atm_strike)}) del vencimiento {esc(em.expiry or '')}, el primero que cubre el reporte: "
+             f"{_num(em.straddle)} {cur} sobre un spot de {_num(em.spot)}, es decir ±{_pct(em.implied_move_pct, False)}. "
+             f"Ese es el movimiento que las opciones descuentan para el evento y el rango {_num(em.implied_low)}–{_num(em.implied_high)} donde el straddle no gana ni pierde. "
+             + (f"El movimiento medio histórico ha sido ±{_pct(em.hist_move_pct, False)}, o sea {_pct(em.premium_vs_hist)} de diferencia: "
+                + ("la prima está cara frente al historial." if (em.premium_vs_hist or 0) > 1
+                   else ("la prima está barata frente al historial." if (em.premium_vs_hist or 0) < -1 else "en línea con el historial."))
+                if em.premium_vs_hist is not None else "")
+             ) if em_ok
+            else "No se pudo calcular el movimiento implícito: este valor puede no tener opciones listadas o el vencimiento no tiene cotizaciones usables.")),
         ("Próximo earnings", esc(nx.date or "por confirmar"), f"EPS est. {_num(nx.eps_avg)} ({_num(nx.eps_low)}–{_num(nx.eps_high)})",
          _t("El próximo examen",
             f"Fecha prevista del siguiente reporte y la nota que espera el mercado: EPS de {_num(nx.eps_avg)}"
@@ -212,7 +334,7 @@ def render_html(report: TickerReport, stats: dict, with_form: bool = False) -> s
       <b>Ingresos consenso</b><span>{_big(nx.rev_avg)} (rango {_big(nx.rev_low)}–{_big(nx.rev_high)}){rgrowth}</span>
       {"<b>EPS trimestre siguiente</b><span>" + _num(nx.next_q_eps_avg) + "</span>" if nx.next_q_eps_avg is not None else ""}
       {"<b>EPS año fiscal</b><span>" + _num(nx.fy_eps_avg) + (f" ({_pct(nx.fy_eps_growth * 100)})" if nx.fy_eps_growth is not None else "") + "</span>" if nx.fy_eps_avg is not None else ""}
-      {"<b>Rango de precio implícito</b><span>±" + f"{e['typical_move']:.1f}% → {_num(e['price_down'])} – {_num(e['price_up'])} {cur}" + "</span>" if e.get('price_up') is not None else ""}
+      {"<b>Rango por histórico</b><span>±" + f"{e['typical_move']:.1f}% → {_num(e['price_down'])} – {_num(e['price_up'])} {cur}" + "</span>" if e.get('price_up') is not None else ""}
     </div>"""
 
     form = ""
@@ -235,6 +357,7 @@ def render_html(report: TickerReport, stats: dict, with_form: bool = False) -> s
     <div class="legend"><span><i style="background:var(--pos)"></i>Sube</span><span><i style="background:var(--neg)"></i>Baja</span></div></div>
 </div>
 <div class="card"><h2>Lectura</h2><ul class="ins">{ins}</ul></div>
+{_expected_move_html(em, s, cur)}
 <div class="grid2">
   <div class="card"><h2>Valoración de analistas</h2>
     <div class="kv"><b>Consenso</b><span><strong>{(an.recommendation_key or '—').replace('_', ' ').upper()}</strong>{f" · nota media {an.recommendation_mean:.2f}/5 (1 = strong buy)" if an.recommendation_mean else ""} · {an.n_opinions or '?'} analistas</span>

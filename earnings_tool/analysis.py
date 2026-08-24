@@ -30,6 +30,17 @@ def _pearson(xs, ys):
     return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / (sxx * syy) ** 0.5
 
 
+def _pctile(xs, q):
+    xs = sorted(x for x in xs if x is not None)
+    if not xs:
+        return None
+    if len(xs) == 1:
+        return xs[0]
+    i = (len(xs) - 1) * q
+    lo, hi = int(i), min(int(i) + 1, len(xs) - 1)
+    return xs[lo] + (xs[hi] - xs[lo]) * (i - lo)
+
+
 def _streak(events: list[EarningsEvent]):
     """Racha actual (más reciente primero): ('beat'|'miss'|'meet', n)."""
     if not events or events[0].result == "n/d":
@@ -95,6 +106,9 @@ def analyze(report: TickerReport) -> dict:
         "avg_abs_move": _mean([abs(m) for m in moves]),          # "movimiento típico"
         "max_abs_move": max((abs(m) for m in moves), default=None),
         "avg_move_5d": _mean(moves5),
+        "p50_abs_move": _pctile([abs(m) for m in moves], 0.50),
+        "p80_abs_move": _pctile([abs(m) for m in moves], 0.80),
+        "p90_abs_move": _pctile([abs(m) for m in moves], 0.90),
         "up_rate": sum(m > 0 for m in moves) / len(moves) * 100 if moves else None,
         "avg_move_on_beat": _mean(beat_moves),
         "avg_move_on_miss": _mean(miss_moves),
@@ -119,6 +133,7 @@ def _expectation(report: TickerReport, s: dict) -> dict:
     nx, an = report.next_earnings, report.analysts
     price = report.price
     typ = s.get("avg_abs_move")
+    em = getattr(report, "expected_move", None)
     exp = {
         "date": nx.date,
         "eps_avg": nx.eps_avg, "eps_low": nx.eps_low, "eps_high": nx.eps_high,
@@ -131,6 +146,13 @@ def _expectation(report: TickerReport, s: dict) -> dict:
         "price_down": price * (1 - typ / 100) if price and typ is not None else None,
         "target_upside": (an.target_mean / price - 1) * 100 if price and an.target_mean else None,
     }
+    # rango implícito por opciones: es lo que el mercado paga HOY por el evento
+    if em is not None and getattr(em, "available", False):
+        exp["implied_move"] = em.implied_move_pct
+        exp["implied_low"] = em.implied_low
+        exp["implied_high"] = em.implied_high
+        exp["implied_expiry"] = em.expiry
+        exp["premium_vs_hist"] = em.premium_vs_hist
     # EPS "esperado" ajustado por la sorpresa media histórica (heurística)
     if nx.eps_avg is not None and s.get("median_surprise") is not None:
         exp["eps_adjusted"] = nx.eps_avg * (1 + s["median_surprise"] / 100)
@@ -192,6 +214,39 @@ def _insights(report: TickerReport, s: dict) -> list[str]:
         elif c <= 0.1:
             out.append(f"La reacción del precio apenas depende de la sorpresa de EPS (correlación {c:.2f}); pesan otros factores.")
 
+    em = getattr(report, "expected_move", None)
+    if em is not None and getattr(em, "available", False):
+        out.append(
+            f"El mercado de opciones paga un movimiento de ±{em.implied_move_pct:.1f}% para el vencimiento "
+            f"{em.expiry} (el que cubre el earning): rango {em.implied_low:,.2f}–{em.implied_high:,.2f}."
+        )
+        if em.premium_vs_hist is not None:
+            if em.premium_vs_hist > 1:
+                out.append(
+                    f"Las opciones descuentan {em.premium_vs_hist:+.1f} puntos MÁS de lo que se ha movido de media "
+                    f"(±{em.hist_move_pct:.1f}% histórico): la prima del evento está cara frente al historial."
+                )
+            elif em.premium_vs_hist < -1:
+                out.append(
+                    f"Las opciones descuentan {abs(em.premium_vs_hist):.1f} puntos MENOS que el movimiento medio histórico "
+                    f"(±{em.hist_move_pct:.1f}%): la prima del evento está barata frente al historial."
+                )
+            else:
+                out.append(
+                    f"El implícito (±{em.implied_move_pct:.1f}%) está en línea con el movimiento medio histórico "
+                    f"(±{em.hist_move_pct:.1f}%)."
+                )
+        if em.hist_inside_rate is not None:
+            out.append(
+                f"De los últimos {em.n_hist} earnings, el {em.hist_inside_rate:.0f}% se quedó DENTRO de un rango como el "
+                f"que hoy pagan las opciones; el {100 - em.hist_inside_rate:.0f}% lo rebasó."
+            )
+        if s.get("p80_abs_move") is not None:
+            out.append(
+                f"Percentiles del movimiento histórico: la mitad de los earnings se movió menos de "
+                f"±{s['p50_abs_move']:.1f}%, y 8 de cada 10 menos de ±{s['p80_abs_move']:.1f}%."
+            )
+
     an, nx, e = report.analysts, report.next_earnings, s["expectation"]
     if an.recommendation_key:
         key = an.recommendation_key.replace("_", " ")
@@ -199,8 +254,8 @@ def _insights(report: TickerReport, s: dict) -> list[str]:
         out.append(f"Consenso de analistas: {key.upper()}{mean_txt} con {an.n_opinions or '?'} opiniones.")
     if e.get("target_upside") is not None:
         out.append(
-            f"Precio objetivo medio {an.target_mean:,.2f} {report.currency} → "
-            f"{e['target_upside']:+.1f}% frente al precio actual ({report.price:,.2f})."
+            f"Referencia a 12 meses (no para el día del earning): precio objetivo medio {an.target_mean:,.2f} "
+            f"{report.currency}, {e['target_upside']:+.1f}% frente al precio actual ({report.price:,.2f})."
         )
     if nx.eps_avg is not None:
         g = f", {nx.eps_growth * 100:+.1f}% interanual" if nx.eps_growth is not None else ""
@@ -214,7 +269,7 @@ def _insights(report: TickerReport, s: dict) -> list[str]:
             )
     if e.get("price_up") is not None:
         out.append(
-            f"Rango de precio implícito por el movimiento histórico: "
+            f"Rango proyectado solo con el histórico (sin opciones): "
             f"{e['price_down']:,.2f} – {e['price_up']:,.2f} {report.currency}."
         )
     return out

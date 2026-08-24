@@ -136,8 +136,53 @@ def render(report: TickerReport, stats: dict, console: Console | None = None):
         fg = f" ({_pct(nx.fy_eps_growth * 100)})" if nx.fy_eps_growth is not None else ""
         p.add_row("EPS año fiscal", f"{_num(nx.fy_eps_avg)}{fg}")
     if e.get("price_up") is not None:
-        p.add_row("Movimiento esperado (hist.)", f"±{e['typical_move']:.1f}% → {_num(e['price_down'])} – {_num(e['price_up'])} {cur}")
+        p.add_row("Rango por histórico", f"±{e['typical_move']:.1f}% → {_num(e['price_down'])} – {_num(e['price_up'])} {cur}")
     console.print(Panel(p, title="Expectativa próximo earnings", box=box.ROUNDED))
+
+    # ---- movimiento esperado por opciones --------------------------------
+    em = getattr(report, "expected_move", None)
+    if em is not None:
+        if not em.available:
+            console.print(Panel(Text(em.reason, style="dim"),
+                                title="Movimiento esperado para el día del earning", box=box.ROUNDED))
+        else:
+            g = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+            g.add_column(style="bold"); g.add_column(); g.add_column(style="bold"); g.add_column()
+            g.add_row("Implícito (opciones)", f"[bold cyan]±{_pct(em.implied_move_pct, signed=False)}[/]",
+                      "Rango implícito", f"{_num(em.implied_low)} – {_num(em.implied_high)} {cur}")
+            pv = em.premium_vs_hist
+            verdict = "—" if pv is None else ("prima cara" if pv > 1 else ("prima barata" if pv < -1 else "en línea"))
+            g.add_row("Histórico medio", f"±{_pct(em.hist_move_pct, signed=False)}",
+                      "Implícito vs histórico", f"{_pct(pv)} ({verdict})")
+            g.add_row("Vencimiento", f"{em.expiry} ({em.days_to_expiry} días)",
+                      "Straddle ATM", f"{_num(em.atm_strike)} → {_num(em.straddle)} {cur}"
+                      + (f" · IV {em.atm_iv * 100:.0f}%" if em.atm_iv else ""))
+            if em.hist_inside_rate is not None:
+                g.add_row("Se quedó dentro", f"{em.hist_inside_rate:.0f}% de {em.n_hist} earnings",
+                          "Percentiles |mov|", f"p50 ±{_pct(s.get('p50_abs_move'), signed=False)} · "
+                                               f"p80 ±{_pct(s.get('p80_abs_move'), signed=False)}")
+            if not em.covers_earnings:
+                g.add_row("Aviso", "[yellow]El vencimiento elegido no cubre la fecha del earning.[/]", "", "")
+            console.print(Panel(g, title="Movimiento esperado para el día del earning", box=box.ROUNDED))
+
+            for kind, label in (("call", "Calls (al alza)"), ("put", "Puts (a la baja)")):
+                rows = [r for r in em.strikes if r.kind == kind]
+                if not rows:
+                    continue
+                st = Table(title=label, box=box.SIMPLE_HEAVY, header_style="bold", title_justify="left")
+                st.add_column("Strike", justify="right"); st.add_column("Dist.", justify="right")
+                st.add_column("Prima", justify="right"); st.add_column("Breakeven", justify="right")
+                st.add_column("Mov. nec.", justify="right"); st.add_column("Hist. supera BE", justify="right")
+                st.add_column("IV", justify="right"); st.add_column("OI", justify="right")
+                for r in rows:
+                    style = "bold" if abs(r.distance_pct) < 0.75 else ("dim" if not r.inside_implied else "")
+                    hb = f"{r.hist_hit_breakeven:.0f}% ({r.hist_hit_n}/{em.n_hist})" if r.hist_hit_breakeven is not None else "—"
+                    st.add_row(_num(r.strike), _pct(r.distance_pct), _num(r.premium), _num(r.breakeven),
+                               _pct(r.breakeven_pct), hb,
+                               f"{r.iv * 100:.0f}%" if r.iv else "—", f"{r.open_interest:,}", style=style)
+                console.print(st)
+            console.print("[dim]Breakeven = strike ± prima. «Hist. supera BE» = cuántos de los últimos earnings se movieron "
+                          "lo suficiente para rebasarlo; es frecuencia pasada, no probabilidad futura.[/]")
 
     # ---- conclusiones ----------------------------------------------------
     console.print(Panel(Group(*[Text(f"• {i}") for i in s["insights"]]), title="Lectura", box=box.ROUNDED))
