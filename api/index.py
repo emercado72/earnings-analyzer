@@ -9,7 +9,7 @@ from earnings_tool.server import handle_request  # noqa: E402
 
 
 class handler(BaseHTTPRequestHandler):
-    def do_GET(self):
+    def _respond(self, send_body: bool):
         code, ctype, body = handle_request(self.path)
         data = body.encode("utf-8")
         self.send_response(code)
@@ -19,4 +19,11 @@ class handler(BaseHTTPRequestHandler):
             # cachear reportes en el edge de Vercel 15 min (los datos cambian poco intradía)
             self.send_header("Cache-Control", "public, s-maxage=900, stale-while-revalidate=3600")
         self.end_headers()
-        self.wfile.write(data)
+        if send_body:
+            self.wfile.write(data)
+
+    def do_GET(self):
+        self._respond(True)
+
+    def do_HEAD(self):
+        self._respond(False)

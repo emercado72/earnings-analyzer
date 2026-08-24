@@ -7,3 +7,4 @@ __pycache__/
 !vercel.json
 !package.json
 .DS_Store
+.vercel

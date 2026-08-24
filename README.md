@@ -1,5 +1,7 @@
 # Análisis de earnings por ticker
 
+**Demo en producción:** https://earnings-analyzer-nine.vercel.app
+
 Herramienta que, dado un ticker, analiza sus **últimos 20 eventos de earnings**:
 
 - **Beat / miss / meet** por evento (EPS reportado vs consenso) y **sorpresa %**.
@@ -65,5 +67,5 @@ reescribe todas las rutas a esa función. Rutas disponibles en producción:
 - `/api/report?ticker=AAPL` — JSON con eventos, analistas, próximo earning y estadísticas
 
 ```bash
-vercel --prod
+vercel --prod        # o simplemente git push: el repo está conectado a Vercel
 ```
