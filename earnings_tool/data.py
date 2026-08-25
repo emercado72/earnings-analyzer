@@ -42,6 +42,17 @@ class EarningsEvent:
     close_after: Optional[float]
     move_1d_pct: Optional[float]   # reacción del precio en la primera sesión post-resultado
     move_5d_pct: Optional[float]   # reacción acumulada a 5 sesiones
+    reaction_date: Optional[str] = None    # sesión en la que el mercado reacciona
+    open_price: Optional[float] = None     # apertura de esa sesión
+    gap_pct: Optional[float] = None        # apertura vs cierre previo
+    day_high: Optional[float] = None       # máximo de toda la sesión
+    day_high_pct: Optional[float] = None
+    day_low: Optional[float] = None
+    oc_high: Optional[float] = None        # máximo de la PRIMERA vela (09:30)
+    oc_high_pct: Optional[float] = None
+    oc_close: Optional[float] = None       # cierre de esa primera vela
+    oc_interval: Optional[str] = None      # "30m" | "60m"
+    oc_time: Optional[str] = None          # hora de apertura de la vela (p.ej. "09:30")
 
 
 @dataclass
@@ -120,13 +131,58 @@ def _price_reaction(closes: pd.Series, day: dt.date, timing: str):
         i_after = i_before + 1
 
     if i_before < 0 or i_after >= len(idx):
-        return None, None, None, None
+        return None, None, None, None, None
 
     cb, ca = float(closes.iloc[i_before]), float(closes.iloc[i_after])
     m1 = (ca / cb - 1) * 100 if cb else None
     i5 = i_after + 4
     m5 = (float(closes.iloc[i5]) / cb - 1) * 100 if i5 < len(idx) and cb else None
-    return cb, ca, m1, m5
+    return cb, ca, m1, m5, idx[i_after]
+
+
+def _fetch_intraday(t) -> dict:
+    """Descarga barras intradía y las indexa por (fecha de sesión, intervalo).
+
+    Yahoo solo sirve intradía reciente: ~60 días para 30m y ~730 para 60m. Los
+    earnings anteriores a esa ventana no tienen vela de apertura recuperable.
+    """
+    out: dict[str, pd.DataFrame] = {}
+    for interval, period in (("30m", "60d"), ("60m", "730d")):
+        try:
+            h = t.history(period=period, interval=interval)
+        except Exception:
+            continue
+        if h is None or h.empty:
+            continue
+        h = h.copy()
+        h["_d"] = [ts.date() for ts in h.index]
+        h["_t"] = [ts.strftime("%H:%M") for ts in h.index]
+        out[interval] = h
+    return out
+
+
+def _opening_candle(intraday: dict, day: dt.date, day_low, day_high):
+    """Primera vela de la sesión `day`. Prefiere 30m; si no, 60m.
+
+    Descarta el dato si no encaja en el rango diario (protege frente a
+    desajustes de ajuste por splits entre series diaria e intradía).
+    """
+    for interval in ("30m", "60m"):
+        h = intraday.get(interval)
+        if h is None or h.empty:
+            continue
+        sub = h[h["_d"] == day]
+        if sub.empty:
+            continue
+        bar = sub.iloc[0]
+        hi, cl = _f(bar.get("High")), _f(bar.get("Close"))
+        if hi is None:
+            continue
+        if day_low is not None and day_high is not None:
+            if not (day_low * 0.98 <= hi <= day_high * 1.02):
+                continue  # escalas incoherentes: mejor no mostrar nada
+        return hi, cl, interval, str(bar.get("_t"))
+    return None, None, None, None
 
 
 def _timing_from_ts(ts) -> str:
@@ -142,7 +198,8 @@ def _timing_from_ts(ts) -> str:
 # --------------------------------------------------------------------------- #
 # Carga principal
 # --------------------------------------------------------------------------- #
-def fetch_report(ticker: str, n_events: int = 20, with_options: bool = True) -> TickerReport:
+def fetch_report(ticker: str, n_events: int = 20, with_options: bool = True,
+                 with_intraday: bool = True) -> TickerReport:
     ticker = ticker.strip().upper()
     t = yf.Ticker(ticker)
 
@@ -170,16 +227,22 @@ def fetch_report(ticker: str, n_events: int = 20, with_options: bool = True) -> 
     if not reported.empty:
         first = reported.index.min().date() - dt.timedelta(days=10)
         try:
-            hist = t.history(start=first.isoformat(), auto_adjust=True)
+            # auto_adjust=False -> precios tal como se vieron en pantalla (con splits
+            # aplicados igualmente), en la misma escala que las barras intradía.
+            hist = t.history(start=first.isoformat(), auto_adjust=False)
         except Exception:
             hist = pd.DataFrame()
     else:
         hist = pd.DataFrame()
     closes = pd.Series(dtype=float)
+    ohlc = pd.DataFrame()
     if not hist.empty:
-        closes = hist["Close"].copy()
-        closes.index = pd.Index([ts.date() for ts in closes.index])
-        closes = closes[~closes.index.duplicated(keep="last")].sort_index()
+        ohlc = hist.copy()
+        ohlc.index = pd.Index([ts.date() for ts in ohlc.index])
+        ohlc = ohlc[~ohlc.index.duplicated(keep="last")].sort_index()
+        closes = ohlc["Close"].copy()
+
+    intraday = _fetch_intraday(t) if (with_intraday and not ohlc.empty) else {}
 
     events: list[EarningsEvent] = []
     for ts, row in reported.iterrows():
@@ -196,11 +259,28 @@ def fetch_report(ticker: str, n_events: int = 20, with_options: bool = True) -> 
         else:
             result = "meet"
         timing = _timing_from_ts(ts)
-        cb, ca, m1, m5 = _price_reaction(closes, ts.date(), timing)
+        cb, ca, m1, m5, rday = _price_reaction(closes, ts.date(), timing)
+
+        op = gap = dhigh = dhigh_pct = dlow = None
+        oc_hi = oc_cl = oc_iv = oc_tm = oc_pct = None
+        if rday is not None and rday in ohlc.index:
+            row = ohlc.loc[rday]
+            op, dhigh, dlow = _f(row.get("Open")), _f(row.get("High")), _f(row.get("Low"))
+            if cb:
+                gap = (op / cb - 1) * 100 if op else None
+                dhigh_pct = (dhigh / cb - 1) * 100 if dhigh else None
+            oc_hi, oc_cl, oc_iv, oc_tm = _opening_candle(intraday, rday, dlow, dhigh)
+            if oc_hi and cb:
+                oc_pct = (oc_hi / cb - 1) * 100
+
         events.append(EarningsEvent(
             date=ts.date().isoformat(), timing=timing,
             eps_estimate=est, eps_reported=rep, surprise_pct=sur, result=result,
             close_before=cb, close_after=ca, move_1d_pct=m1, move_5d_pct=m5,
+            reaction_date=rday.isoformat() if rday is not None else None,
+            open_price=op, gap_pct=gap, day_high=dhigh, day_high_pct=dhigh_pct, day_low=dlow,
+            oc_high=oc_hi, oc_high_pct=oc_pct, oc_close=oc_cl,
+            oc_interval=oc_iv, oc_time=oc_tm,
         ))
 
     # --- próximo earnings -------------------------------------------------

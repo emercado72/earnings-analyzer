@@ -7,6 +7,9 @@ Herramienta que, dado un ticker, analiza sus **últimos 20 eventos de earnings**
 - **Beat / miss / meet** por evento (EPS reportado vs consenso) y **sorpresa %**.
 - **Reacción del precio** en la primera sesión tras el anuncio (1 día) y a 5 días,
   teniendo en cuenta si el reporte fue antes de apertura (BMO) o tras el cierre (AMC).
+- **Recorrido dentro de esa sesión**: apertura y gap, **máximo alcanzado en toda la
+  sesión** y **máximo de la primera vela (09:30)**, para saber qué pico hubo realmente
+  disponible antes de que el precio se desinflara hacia el cierre.
 - Estadísticas: tasa de beat, sorpresa media/mediana, movimiento típico, reacción media
   si beat / si miss, racha actual, correlación sorpresa↔reacción, últimos 4 y 8.
 - **Valoración de analistas**: consenso (buy/hold/sell), distribución de recomendaciones
@@ -36,6 +39,7 @@ python3 -m venv .venv
 ./earnings MSFT --html msft.html --json msft.json
 ./earnings TSLA -n 12              # solo los últimos 12 eventos
 ./earnings AAPL --no-options       # omite la cadena de opciones (más rápido)
+./earnings AAPL --no-intraday      # omite las velas intradía
 ./earnings --serve                 # interfaz web en http://127.0.0.1:8765
 ```
 
@@ -69,6 +73,14 @@ earnings_tool/
 - La columna "histórico supera BE" es **frecuencia pasada** sobre los últimos N earnings,
   no una probabilidad futura ni una recomendación. Los datos de la cadena de opciones
   llegan con retraso; contrasta precios con tu bróker antes de operar.
+- **Máximo de la primera vela**: Yahoo solo conserva histórico intradía reciente
+  (unos 60 días con velas de 30 minutos y unos 730 días con velas de 60 minutos), así
+  que esa columna solo se rellena en los earnings dentro de esa ventana; el resto queda
+  vacío. El **máximo de la sesión completa**, en cambio, está disponible para todos los
+  eventos. Si el dato intradía no encaja en el rango diario (posible desajuste por
+  splits) se descarta en lugar de mostrarse.
+- Los precios usan `auto_adjust=False`: llevan splits aplicados pero no ajuste por
+  dividendos, para que coincidan con lo que se vio en pantalla y con las barras intradía.
 - No todos los valores tienen opciones listadas (las cotizadas europeas normalmente no);
   en ese caso la sección lo indica y el resto del informe funciona igual.
 

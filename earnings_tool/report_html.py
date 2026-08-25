@@ -242,14 +242,25 @@ def render_html(report: TickerReport, stats: dict, with_form: bool = False) -> s
     cur = html.escape(report.currency)
     esc = html.escape
 
+    def _peak_cell(price, pct, extra=""):
+        if price is None:
+            return "<td style='color:var(--ink3)'>—</td>"
+        return (f"<td>{_num(price)}<div style='font-size:11px' class='{_cls(pct)}'>{_pct(pct)}{extra}</div></td>")
+
     rows = []
     for i, ev in enumerate(report.events, 1):
+        oc_extra = (f" <span style='color:var(--ink3)'>{esc(ev.oc_interval or '')}</span>"
+                    if ev.oc_high is not None else "")
         rows.append(
             f"<tr><td>{i}</td><td>{ev.date} <span style='color:var(--ink3)'>{ev.timing}</span></td>"
             f"<td>{_num(ev.eps_estimate)}</td><td>{_num(ev.eps_reported)}</td>"
             f"<td class='{_cls(ev.surprise_pct)}'>{_pct(ev.surprise_pct)}</td>"
             f"<td><span class='badge {ev.result}'>{ev.result.upper()}</span></td>"
-            f"<td>{_num(ev.close_before)}</td><td>{_num(ev.close_after)}</td>"
+            f"<td>{_num(ev.close_before)}</td>"
+            f"<td>{_num(ev.open_price)}<div style='font-size:11px' class='{_cls(ev.gap_pct)}'>{_pct(ev.gap_pct)}</div></td>"
+            + _peak_cell(ev.day_high, ev.day_high_pct)
+            + _peak_cell(ev.oc_high, ev.oc_high_pct, oc_extra)
+            + f"<td>{_num(ev.close_after)}</td>"
             f"<td class='{_cls(ev.move_1d_pct)}'>{_pct(ev.move_1d_pct)}</td>"
             f"<td class='{_cls(ev.move_5d_pct)}'>{_pct(ev.move_5d_pct)}</td></tr>"
         )
@@ -257,6 +268,7 @@ def render_html(report: TickerReport, stats: dict, with_form: bool = False) -> s
     up = e.get("target_upside")
     em = getattr(report, "expected_move", None)
     em_ok = em is not None and getattr(em, "available", False)
+    ses = s.get("session") or {}
 
     def _t(title, body):
         return html.escape(f"{title}||{body}")
@@ -291,6 +303,15 @@ def render_html(report: TickerReport, stats: dict, with_form: bool = False) -> s
             f"Recomendación agregada de {an.n_opinions or '?'} analistas que cubren el valor, en una escala de 1 a 5 donde 1 es strong buy y 5 es sell"
             + (f"; aquí {an.recommendation_mean:.2f}." if an.recommendation_mean else ".")
             + " Abajo tienes cómo se reparten los votos y si han cambiado de opinión en los últimos 3 meses. Es opinión de mercado, no una verdad: suele ir sesgada hacia comprar.")),
+        ("Pico medio de la sesión", _pct(ses.get("avg_day_high")),
+         (f"se desinfla {ses['avg_fade']:.1f} pp hasta el cierre" if ses.get("avg_fade") is not None else ""),
+         _t("¿Hasta dónde llegó el precio?",
+            f"Máximo medio que alcanzó la acción durante la sesión de reacción, medido sobre el cierre previo: {_pct(ses.get('avg_day_high'))}. "
+            + (f"Desde ese pico hasta el cierre se pierden de media {ses['avg_fade']:.1f} puntos porcentuales, así que aguantar hasta el cierre "
+               f"cuesta esa diferencia frente a vender arriba. " if ses.get("avg_fade") is not None else "")
+            + (f"En el {ses['green_window_rate']:.0f}% de los earnings hubo algún momento de la sesión con el precio por encima del cierre previo"
+               + (f", y de los que acabaron en rojo el {ses['red_close_green_high']:.0f}% había estado en verde antes." if ses.get("red_close_green_high") is not None else ".")
+               if ses.get("green_window_rate") is not None else ""))),
         ("Movimiento implícito", ("±" + _pct(em.implied_move_pct, False)) if em_ok else "—",
          (f"opciones {esc(em.expiry)} · {_num(em.implied_low)}–{_num(em.implied_high)}" if em_ok
           else esc((em.reason if em is not None else "sin datos de opciones")[:60])),
@@ -372,7 +393,10 @@ def render_html(report: TickerReport, stats: dict, with_form: bool = False) -> s
 <th data-tip="EPS real||Beneficio por acción que la empresa reportó de verdad.">EPS real</th>
 <th data-tip="Sorpresa||Diferencia porcentual entre el EPS real y el estimado. Positiva = batió al consenso.">Sorpresa</th>
 <th data-tip="Resultado||BEAT si superó el consenso, MISS si quedó por debajo, MEET si acertó en el clavo.">Resultado</th>
-<th data-tip="Cierre previo||Precio de cierre de la sesión anterior a que el mercado pudiera reaccionar al reporte. Es la referencia de partida.">Cierre prev.</th>
+<th data-tip="Cierre previo||Precio de cierre de la sesión anterior a que el mercado pudiera reaccionar al reporte. Es la referencia de partida y el 0% de todos los porcentajes de esta zona.">Cierre prev.</th>
+<th data-tip="Apertura||Precio al que abrió la sesión de reacción y el hueco (gap) que dejó respecto al cierre previo. En reportes AMC casi todo el movimiento aparece ya en este salto.">Apertura</th>
+<th data-tip="Máximo de la sesión||El pico más alto que tocó el precio en toda la sesión de reacción, y cuánto supone sobre el cierre previo. Es el techo real que hubo disponible ese día. Disponible para todos los eventos.">Máx. sesión</th>
+<th data-tip="Máximo de la primera vela||Pico alcanzado dentro de la primera vela de la sesión (la de las 09:30). La etiqueta 30m o 60m indica la duración de esa vela. Yahoo solo conserva intradía reciente (60 días en 30m, unos 2 años en 60m), así que los earnings más antiguos aparecen vacíos.">Máx. 1ª vela</th>
 <th data-tip="Cierre posterior||Precio de cierre de la primera sesión en la que el mercado ya conocía el reporte.">Cierre post</th>
 <th data-tip="Reacción a 1 día||Cuánto se movió el precio entre esos dos cierres. Es el veredicto inmediato del mercado sobre el reporte.">Reacción 1d</th>
 <th data-tip="Reacción a 5 días||Movimiento acumulado tras cinco sesiones. Sirve para ver si el golpe inicial se mantuvo o se dio la vuelta al reposar la noticia.">5 días</th></tr></thead>

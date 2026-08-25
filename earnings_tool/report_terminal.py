@@ -64,13 +64,26 @@ def render(report: TickerReport, stats: dict, console: Console | None = None):
     t.add_column("Sorpr.", justify="right", no_wrap=True)
     t.add_column("Result", justify="center")
     t.add_column("P. prev", justify="right")
+    t.add_column("Apert", justify="right", no_wrap=True)
+    t.add_column("Máx día", justify="right", no_wrap=True)
+    t.add_column("Máx 1ªvela", justify="right", no_wrap=True)
     t.add_column("P. post", justify="right")
     t.add_column("React 1d", justify="right", no_wrap=True)
     t.add_column("5d", justify="right", no_wrap=True)
     for i, e in enumerate(report.events, 1):
+        def _peak(price, pct):
+            if price is None:
+                return Text("—", style="dim")
+            txt = Text(f"{price:,.2f} ")
+            txt.append_text(_color_pct(pct))
+            return txt
         t.add_row(str(i), e.date, e.timing, _num(e.eps_estimate), _num(e.eps_reported),
                   _color_pct(e.surprise_pct), _result_text(e.result),
-                  _num(e.close_before), _num(e.close_after),
+                  _num(e.close_before),
+                  _peak(e.open_price, e.gap_pct),
+                  _peak(e.day_high, e.day_high_pct),
+                  _peak(e.oc_high, e.oc_high_pct),
+                  _num(e.close_after),
                   _color_pct(e.move_1d_pct), _color_pct(e.move_5d_pct))
     console.print(t)
 
@@ -94,6 +107,15 @@ def render(report: TickerReport, stats: dict, console: Console | None = None):
     l4, l8 = s["last4"], s["last8"]
     summ.add_row("Últimos 4", f"{l4['beats']}B/{l4['misses']}M · sorpresa {_pct(l4['avg_surprise'])} · reacción {_pct(l4['avg_move'])}",
                  "Últimos 8", f"{l8['beats']}B/{l8['misses']}M · sorpresa {_pct(l8['avg_surprise'])} · reacción {_pct(l8['avg_move'])}")
+    ss = s.get("session") or {}
+    if ss.get("avg_day_high") is not None:
+        summ.add_row("Máximo medio de la sesión", _pct(ss["avg_day_high"]),
+                     "Gap medio de apertura", _pct(ss["avg_gap"]))
+    if ss.get("n_oc"):
+        iv = "/".join(ss["oc_intervals"])
+        summ.add_row(f"Pico medio 1ª vela ({iv})",
+                     f"{_pct(ss['avg_oc_high'])} · n={ss['n_oc']}",
+                     "Máx. del día en la 1ª vela", _pct(ss["peak_in_oc_rate"], signed=False, nd=0))
     console.print(Panel(summ, title="Resumen histórico", box=box.ROUNDED))
 
     # ---- analistas -------------------------------------------------------

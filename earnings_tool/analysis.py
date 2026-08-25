@@ -53,6 +53,14 @@ def _streak(events: list[EarningsEvent]):
     return kind, n
 
 
+def _rescue_rate(ev):
+    """% de earnings que cerraron abajo pero llegaron a cotizar por encima del cierre previo."""
+    red = [e for e in ev if e.move_1d_pct is not None and e.move_1d_pct < 0 and e.day_high_pct is not None]
+    if not red:
+        return None
+    return sum(1 for e in red if e.day_high_pct > 0) / len(red) * 100
+
+
 def _window(events: list[EarningsEvent], n: int) -> dict:
     ev = [e for e in events[:n] if e.result != "n/d"]
     beats = sum(e.result == "beat" for e in ev)
@@ -122,6 +130,42 @@ def analyze(report: TickerReport) -> dict:
         "last8": _window(ev, 8),
         "first_date": ev[-1].date if ev else None,
         "last_date": ev[0].date if ev else None,
+    }
+    # --- comportamiento de la sesión de reacción (apertura / vela 09:30 / máximo) ---
+    gaps = [e.gap_pct for e in ev if e.gap_pct is not None]
+    dhs = [e.day_high_pct for e in ev if e.day_high_pct is not None]
+    oc = [e for e in ev if e.oc_high_pct is not None]
+    ocs = [e.oc_high_pct for e in oc]
+    # ¿el máximo del día se hizo dentro de la primera vela?
+    peak_in_oc = [e for e in oc if e.day_high and e.oc_high and e.oc_high >= e.day_high * 0.999]
+    # cuánto del recorrido máximo del día capturaba quien vendía en la primera vela
+    # cuánto se quedó el pico de la 1ª vela por debajo del máximo del día (puntos porcentuales)
+    shortfall = [
+        (e.day_high_pct - e.oc_high_pct)
+        for e in oc if e.day_high_pct is not None and e.oc_high_pct is not None
+    ]
+    stats["session"] = {
+        "n_gap": len(gaps),
+        "avg_gap": _mean(gaps),
+        "avg_day_high": _mean(dhs),
+        "n_oc": len(oc),
+        "oc_intervals": sorted({e.oc_interval for e in oc if e.oc_interval}),
+        "avg_oc_high": _mean(ocs),
+        "median_oc_high": _median(ocs),
+        "max_oc_high": max(ocs) if ocs else None,
+        "min_oc_high": min(ocs) if ocs else None,
+        "oc_positive_rate": (sum(1 for x in ocs if x > 0) / len(ocs) * 100) if ocs else None,
+        "peak_in_oc_rate": (len(peak_in_oc) / len(oc) * 100) if oc else None,
+        "avg_shortfall": _mean(shortfall),
+        # cuánto se desinfla el precio desde el máximo de la sesión hasta el cierre
+        "avg_fade": _mean([
+            e.day_high_pct - e.move_1d_pct
+            for e in ev if e.day_high_pct is not None and e.move_1d_pct is not None
+        ]),
+        # ¿hubo en algún momento de la sesión una ventana en verde para vender?
+        "green_window_rate": (sum(1 for x in dhs if x > 0) / len(dhs) * 100) if dhs else None,
+        # de los earnings que cerraron en rojo, cuántos tuvieron máximo positivo
+        "red_close_green_high": _rescue_rate(ev),
     }
     stats["expectation"] = _expectation(report, stats)
     stats["insights"] = _insights(report, stats)
@@ -213,6 +257,47 @@ def _insights(report: TickerReport, s: dict) -> list[str]:
             out.append(f"La magnitud de la sorpresa explica bien la reacción (correlación {c:.2f}).")
         elif c <= 0.1:
             out.append(f"La reacción del precio apenas depende de la sorpresa de EPS (correlación {c:.2f}); pesan otros factores.")
+
+    ss = s.get("session") or {}
+    if ss.get("n_oc"):
+        iv = "/".join(ss["oc_intervals"]) or "intradía"
+        out.append(
+            f"Vela de apertura ({iv}): el pico medio de la primera vela fue {ss['avg_oc_high']:+.1f}% sobre el cierre previo "
+            f"(mediana {ss['median_oc_high']:+.1f}%, mejor {ss['max_oc_high']:+.1f}%, peor {ss['min_oc_high']:+.1f}%), "
+            f"medido en {ss['n_oc']} de {s['n']} earnings — Yahoo solo guarda intradía reciente."
+        )
+        if ss.get("peak_in_oc_rate") is not None:
+            out.append(
+                f"En el {ss['peak_in_oc_rate']:.0f}% de esos casos el MÁXIMO de toda la sesión se hizo dentro de la primera vela: "
+                + ("vender ahí capturaba prácticamente el techo del día."
+                   if ss["peak_in_oc_rate"] >= 60 else
+                   "a menudo el techo del día llegó más tarde, no en la apertura.")
+            )
+        if ss.get("avg_shortfall") is not None:
+            out.append(
+                f"El pico de la primera vela se quedó de media {ss['avg_shortfall']:.2f} puntos porcentuales por debajo "
+                f"del máximo de toda la sesión."
+            )
+    if ss.get("avg_fade") is not None:
+        out.append(
+            f"Del máximo de la sesión al cierre se desinflan de media {ss['avg_fade']:.1f} puntos porcentuales: "
+            f"ese es el coste de aguantar hasta el cierre en vez de vender en el pico."
+        )
+    if ss.get("green_window_rate") is not None:
+        out.append(
+            f"En el {ss['green_window_rate']:.0f}% de los earnings el precio llegó a cotizar por encima del cierre previo "
+            f"en algún momento de la sesión."
+        )
+    if ss.get("red_close_green_high") is not None:
+        out.append(
+            f"De los earnings que acabaron cerrando en rojo, el {ss['red_close_green_high']:.0f}% había estado en verde "
+            f"durante la sesión: hubo ventana de salida antes del desplome."
+        )
+    if ss.get("avg_gap") is not None:
+        out.append(
+            f"Apertura media de la sesión de reacción: {ss['avg_gap']:+.1f}% de gap sobre el cierre previo; "
+            f"el máximo del día promedió {ss['avg_day_high']:+.1f}%."
+        )
 
     em = getattr(report, "expected_move", None)
     if em is not None and getattr(em, "available", False):
